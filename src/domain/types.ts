@@ -1,15 +1,33 @@
 /**
- * Modelo de dominio del flujo Facturación → Preparación → Almacén/Cubo.
+ * Modelo de dominio del flujo
+ * Facturación → Preparación → Almacén / Material de Empaque → Embarques.
  *
  * Una OD (Orden de Distribución) la libera Facturación y trae una o varias
  * OC (Órdenes de Compra). Cada OC trae paquetes; un paquete puede venir en
  * varios colores. Si Preparación no encuentra todos los colores de un paquete,
- * levanta un paro por falta de material y solicita el surtido a Almacén/Cubo.
+ * levanta un paro por falta de material y solicita el surtido al área que le
+ * corresponde. Cuando todas las OC quedan completas, la OD pasa a Embarques.
  */
 
-export type Area = 'FACTURACION' | 'PREPARACION' | 'ALMACEN' | 'CUBO'
+export type Area =
+  | 'FACTURACION'
+  | 'PREPARACION'
+  | 'ALMACEN'
+  | 'MATERIAL_EMPAQUE'
+  | 'EMBARQUES'
 
-export type Surtidor = Extract<Area, 'ALMACEN' | 'CUBO'>
+/** Áreas que surten material a Preparación. */
+export type Surtidor = Extract<Area, 'ALMACEN' | 'MATERIAL_EMPAQUE'>
+
+export const SURTIDORES: readonly Surtidor[] = ['ALMACEN', 'MATERIAL_EMPAQUE']
+
+export const ETIQUETA_AREA: Record<Area, string> = {
+  FACTURACION: 'Facturación',
+  PREPARACION: 'Preparación',
+  ALMACEN: 'Almacén',
+  MATERIAL_EMPAQUE: 'Material de Empaque',
+  EMBARQUES: 'Embarques',
+}
 
 /** Un color concreto dentro de un paquete. Es la unidad mínima que se surte. */
 export interface Pieza {
@@ -49,6 +67,10 @@ export const ETIQUETA_MOTIVO_PARO: Record<MotivoParo, string> = {
   OTRO: 'Otro',
 }
 
+/** Cadenas que aparecen en piso. Cada OD tiene un único cliente; sus OC lo heredan. */
+export const CLIENTES = ['Walmart', 'Soriana', 'Chedraui'] as const
+export type Cliente = (typeof CLIENTES)[number]
+
 export interface ParoOC {
   iniciadoEn: number
   cerradoEn?: number
@@ -61,6 +83,8 @@ export interface OC {
   id: string
   /** Folio visible de la orden de compra. */
   folio: string
+  /** Cliente de la OC. Coincide con `od.cliente`; una OD no mezcla clientes. */
+  cliente: string
   surtidor: Surtidor
   paquetes: Paquete[]
   kg: number
@@ -75,11 +99,15 @@ export type EstadoOD =
   | 'LIBERADA'
   | 'EN_PREPARACION'
   | 'PARADA'
-  | 'COMPLETADA'
+  /** Preparación terminó todas las OC; la OD espera carga en Embarques. */
+  | 'EN_EMBARQUE'
+  /** Embarques confirmó la salida. Estado terminal. */
+  | 'EMBARCADA'
 
 export interface OD {
   id: string
   folio: string
+  /** Cliente de la OD. Todas las OC de esta orden llevan el mismo. */
   cliente: string
   /** Destino de la distribución: Foráneo o México. */
   tipo: TipoDestino
@@ -90,7 +118,10 @@ export interface OD {
   liberadaEn: number
   /** Momento en que Preparación tomó la OD. Arranca el reloj de Preparación. */
   iniciadaEn?: number
+  /** Momento en que Preparación cerró la última OC. Arranca el reloj de Embarques. */
   terminadaEn?: number
+  /** Momento en que Embarques confirmó la salida. Cierra el ciclo. */
+  embarcadaEn?: number
 }
 
 export type EstadoSolicitud = 'SOLICITADA' | 'EN_SURTIDO' | 'PAUSADA' | 'SURTIDA'
@@ -109,7 +140,7 @@ export interface EventoSolicitud {
 }
 
 /**
- * Petición de material de Preparación a Almacén/Cubo.
+ * Petición de material de Preparación a Almacén / Material de Empaque.
  *
  * Lleva dos relojes: el bruto corre desde `SOLICITADA` hasta `SURTIDA` sin
  * importar la causa (impacto real al pedido), y el neto sólo acumula los
@@ -147,6 +178,4 @@ export interface Estado {
   ods: OD[]
   solicitudes: Solicitud[]
   notificaciones: Notificacion[]
-  /** Motor de simulación encendido/apagado. */
-  simulando: boolean
 }

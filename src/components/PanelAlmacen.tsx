@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useAhora, useStore } from '../domain/hooks'
 import { UMBRALES, formatHora, relojSolicitud, semaforo } from '../domain/timers'
 import type { OD, Solicitud, Surtidor } from '../domain/types'
+import { ETIQUETA_AREA } from '../domain/types'
+import { COLOR_AREA } from './tokens'
 import { Boton, Chip, Reloj, Tarjeta } from './ui'
 
 const MOTIVOS_PAUSA = [
@@ -12,7 +14,7 @@ const MOTIVOS_PAUSA = [
 ]
 
 /**
- * Pantalla de Almacén/Cubo. La cola se ordena por paro primero: una OC que
+ * Pantalla de un área que surte (Almacén o Material de Empaque). La cola se ordena por paro primero: una OC que
  * detuvo a Preparación pesa más que un pedido anticipado.
  */
 export function PanelAlmacen({ area }: { area: Surtidor }) {
@@ -35,13 +37,13 @@ export function PanelAlmacen({ area }: { area: Surtidor }) {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-              Cola de surtido · {area === 'ALMACEN' ? 'Almacén' : 'Cubo'}
+              Cola de surtido · {ETIQUETA_AREA[area]}
             </h2>
             <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
               Al pausar, el reloj del área se congela y sigue corriendo el total del pedido.
             </p>
           </div>
-          <Chip color={area === 'ALMACEN' ? 'var(--area-alm)' : 'var(--area-cubo)'} solido>
+          <Chip color={COLOR_AREA[area]} solido>
             {cola.length} pendientes
           </Chip>
         </div>

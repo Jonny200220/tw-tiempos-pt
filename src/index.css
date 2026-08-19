@@ -20,7 +20,8 @@
   --area-fact: #898781;
   --area-prep: #2a78d6;
   --area-alm: #eb6834;
-  --area-cubo: #1baf7a;
+  --area-mat: #1baf7a;
+  --area-emb: #7d4bb5;
 
   --st-good: #0ca30c;
   --st-warning: #fab219;
@@ -47,7 +48,8 @@
     --area-fact: #898781;
     --area-prep: #3987e5;
     --area-alm: #d95926;
-    --area-cubo: #199e70;
+    --area-mat: #199e70;
+    --area-emb: #9b6be0;
   }
 }
 
@@ -66,7 +68,8 @@
   --area-fact: #898781;
   --area-prep: #3987e5;
   --area-alm: #d95926;
-  --area-cubo: #199e70;
+  --area-mat: #199e70;
+  --area-emb: #9b6be0;
 }
 
 body {

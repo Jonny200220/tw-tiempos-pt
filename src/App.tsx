@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Dashboard } from './components/Dashboard'
 import { Notificaciones } from './components/Notificaciones'
 import { PanelAlmacen } from './components/PanelAlmacen'
+import { PanelEmbarques } from './components/PanelEmbarques'
 import { PanelPreparacion } from './components/PanelPreparacion'
 import { Boton } from './components/ui'
 import { COLOR_AREA } from './components/tokens'
@@ -9,14 +10,36 @@ import { StoreProvider } from './domain/store'
 import { useAhora, useStore } from './domain/hooks'
 import type { Area } from './domain/types'
 
-type Vista = 'TABLERO' | 'PREPARACION' | 'ALMACEN' | 'CUBO' | 'FACTURACION'
+type Vista =
+  | 'TABLERO'
+  | 'PREPARACION'
+  | 'ALMACEN'
+  | 'MATERIAL_EMPAQUE'
+  | 'EMBARQUES'
+  | 'FACTURACION'
 
 const VISTAS: { id: Vista; etiqueta: string; color: string; area?: Area }[] = [
   { id: 'TABLERO', etiqueta: 'Tablero', color: 'var(--text-muted)' },
-  { id: 'PREPARACION', etiqueta: 'Preparación', color: COLOR_AREA.PREPARACION, area: 'PREPARACION' },
+  {
+    id: 'PREPARACION',
+    etiqueta: 'Preparación',
+    color: COLOR_AREA.PREPARACION,
+    area: 'PREPARACION',
+  },
   { id: 'ALMACEN', etiqueta: 'Almacén', color: COLOR_AREA.ALMACEN, area: 'ALMACEN' },
-  { id: 'CUBO', etiqueta: 'Cubo', color: COLOR_AREA.CUBO, area: 'CUBO' },
-  { id: 'FACTURACION', etiqueta: 'Facturación', color: 'var(--text-muted)' },
+  {
+    id: 'MATERIAL_EMPAQUE',
+    etiqueta: 'Material de Empaque',
+    color: COLOR_AREA.MATERIAL_EMPAQUE,
+    area: 'MATERIAL_EMPAQUE',
+  },
+  { id: 'EMBARQUES', etiqueta: 'Embarques', color: COLOR_AREA.EMBARQUES, area: 'EMBARQUES' },
+  {
+    id: 'FACTURACION',
+    etiqueta: 'Facturación',
+    color: COLOR_AREA.FACTURACION,
+    area: 'FACTURACION',
+  },
 ]
 
 export default function App() {
@@ -29,7 +52,7 @@ export default function App() {
 
 function Tablero() {
   const [vista, setVista] = useState<Vista>('TABLERO')
-  const { estado, dispatch } = useStore()
+  const { dispatch } = useStore()
   const ahora = useAhora()
   const areaActual = VISTAS.find((v) => v.id === vista)?.area
 
@@ -42,10 +65,10 @@ function Tablero() {
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3">
           <div className="text-left">
             <h1 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
-            Tiempos PT
+              Tiempos PT
             </h1>
             <p className="tabular text-xs" style={{ color: 'var(--text-muted)' }}>
-              {new Date(ahora).toLocaleTimeString('es-MX', { hour12: false })} · datos simulados
+              {new Date(ahora).toLocaleTimeString('es-MX', { hour12: false })}
             </p>
           </div>
 
@@ -71,14 +94,10 @@ function Tablero() {
           </nav>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Boton onClick={() => dispatch({ tipo: 'LIBERAR_OD' })}>+ Liberar OD</Boton>
-            <Boton
-              tono={estado.simulando ? 'peligro' : 'primario'}
-              onClick={() => dispatch({ tipo: 'TOGGLE_SIMULACION' })}
-            >
-              {estado.simulando ? '■ Detener simulación' : '▶ Simular flujo'}
+            <Boton tono="primario" onClick={() => dispatch({ tipo: 'LIBERAR_OD' })}>
+              + Liberar OD
             </Boton>
-            <Boton onClick={() => dispatch({ tipo: 'REINICIAR' })}>Reiniciar</Boton>
+            <Boton onClick={() => dispatch({ tipo: 'REINICIAR' })}>Limpiar tablero</Boton>
             {areaActual && <Notificaciones area={areaActual} />}
           </div>
         </div>
@@ -88,8 +107,10 @@ function Tablero() {
         {vista === 'TABLERO' && <Dashboard />}
         {vista === 'PREPARACION' && <PanelPreparacion />}
         {vista === 'ALMACEN' && <PanelAlmacen area="ALMACEN" />}
-        {vista === 'CUBO' && <PanelAlmacen area="CUBO" />}
-        {/* {vista === 'FACTURACION' && <PanelFacturacion />} */}
+        {vista === 'MATERIAL_EMPAQUE' && <PanelAlmacen area="MATERIAL_EMPAQUE" />}
+        {vista === 'EMBARQUES' && <PanelEmbarques />}
+        {/* Facturación no captura tiempos: ve el mismo tablero que el resto. */}
+        {vista === 'FACTURACION' && <Dashboard />}
       </main>
 
       <footer

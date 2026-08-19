@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useAhora, useStore } from '../domain/hooks'
+import { enPreparacion } from '../domain/reducer'
 import {
   UMBRALES,
   avanceOC,
@@ -10,23 +11,25 @@ import {
   relojOC,
   semaforo,
 } from '../domain/timers'
-import {
-  ETIQUETA_MOTIVO_PARO,
-  ETIQUETA_TIPO,
-  type MotivoParo,
-  type OC,
-  type OD,
-  type Paquete,
-} from '../domain/types'
+import { ETIQUETA_MOTIVO_PARO, ETIQUETA_TIPO, type MotivoParo, type OC, type OD, type Paquete } from '../domain/types'
 import { Boton, Chip, Medidor, Modal, Reloj, Tarjeta } from './ui'
 
 const MOTIVOS: MotivoParo[] = ['FALTA_MATERIAL', 'DESCANSO', 'OTRO']
+
+function piezasDeOCs(ocs: OC[]): number {
+  return ocs.reduce((acc, oc) => acc + piezasDeOC(oc), 0)
+}
+
+function kgDeOCs(ocs: OC[]): number {
+  return ocs.reduce((acc, oc) => acc + (oc.kg ?? 0), 0)
+}
 
 /** Pantalla de piso de Preparación: tomar OD, parar/reanudar OC, cerrar. */
 export function PanelPreparacion() {
   const { estado, dispatch } = useStore()
   const ahora = useAhora()
-  const [abierta, setAbierta] = useState<string | null>(null)
+  const [abiertoGrupo, setAbiertoGrupo] = useState<string | null>(null)
+  const [abiertaOc, setAbiertaOc] = useState<string | null>(null)
   const [iniciando, setIniciando] = useState<string | null>(null)
   const [parando, setParando] = useState<{ odId: string; ocId: string } | null>(null)
   const [editando, setEditando] = useState<{ odId: string; ocId: string; paqueteId: string } | null>(
@@ -34,9 +37,8 @@ export function PanelPreparacion() {
   )
 
   const pendientes = estado.ods.filter((o) => o.iniciadaEn === undefined)
-  const enProceso = estado.ods.filter(
-    (o) => o.iniciadaEn !== undefined && o.estado !== 'COMPLETADA',
-  )
+  // Al cerrar la última OC la OD sale de Preparación y se forma en Embarques.
+  const enProceso = estado.ods.filter(enPreparacion)
   const odIniciando = pendientes.find((o) => o.id === iniciando)
 
   return (
@@ -77,7 +79,7 @@ export function PanelPreparacion() {
                     folio={od.folio}
                     tipo={ETIQUETA_TIPO[od.tipo] ?? 'México'}
                     oc={od.ocs.map((oc) => oc.folio).join(' · ')}
-                    cadena={od.cliente}
+                    cliente={od.cliente}
                     piezas={piezasDeOD(od)}
                     kg={kgDeOD(od)}
                   />
@@ -100,26 +102,30 @@ export function PanelPreparacion() {
       </Tarjeta>
 
       <div className="flex flex-col gap-3">
-        {enProceso.flatMap((od) =>
-          od.ocs
-            .filter((oc) => oc.estado !== 'PENDIENTE' && oc.estado !== 'COMPLETADA')
-            .map((oc) => (
-              <FichaOC
-                key={oc.id}
-                od={od}
-                oc={oc}
-                ahora={ahora}
-                abierta={abierta === oc.id}
-                onToggle={() => setAbierta(abierta === oc.id ? null : oc.id)}
-                onParar={() => setParando({ odId: od.id, ocId: oc.id })}
-                onReanudar={() => dispatch({ tipo: 'REANUDAR_OC', odId: od.id, ocId: oc.id })}
-                onFinalizar={() => dispatch({ tipo: 'TERMINAR_OC', odId: od.id, ocId: oc.id })}
-                onEditarPaquete={(paqueteId) =>
-                  setEditando({ odId: od.id, ocId: oc.id, paqueteId })
-                }
-              />
-            )),
-        )}
+        {enProceso.map((od) => {
+          const ocsActivas = od.ocs.filter(
+            (oc) => oc.estado !== 'PENDIENTE' && oc.estado !== 'COMPLETADA',
+          )
+          if (ocsActivas.length === 0) return null
+          return (
+            <FichaGrupo
+              key={od.id}
+              od={od}
+              ocs={ocsActivas}
+              ahora={ahora}
+              abierto={abiertoGrupo === od.id}
+              ocAbierta={abiertaOc}
+              onToggleGrupo={() => setAbiertoGrupo(abiertoGrupo === od.id ? null : od.id)}
+              onToggleOc={(ocId) => setAbiertaOc(abiertaOc === ocId ? null : ocId)}
+              onParar={(ocId) => setParando({ odId: od.id, ocId })}
+              onReanudar={(ocId) => dispatch({ tipo: 'REANUDAR_OC', odId: od.id, ocId })}
+              onFinalizar={(ocId) => dispatch({ tipo: 'TERMINAR_OC', odId: od.id, ocId })}
+              onEditarPaquete={(ocId, paqueteId) =>
+                setEditando({ odId: od.id, ocId, paqueteId })
+              }
+            />
+          )
+        })}
       </div>
 
       {odIniciando && (
@@ -129,8 +135,7 @@ export function PanelPreparacion() {
           onConfirmar={(personasPorOc) => {
             dispatch({ tipo: 'INICIAR_PREPARACION', odId: odIniciando.id, personasPorOc })
             setIniciando(null)
-            const primera = odIniciando.ocs[0]
-            if (primera) setAbierta(primera.id)
+            setAbiertoGrupo(odIniciando.id)
           }}
         />
       )}
@@ -191,22 +196,22 @@ function CamposDatos({
   folio,
   tipo,
   oc,
-  cadena,
+  cliente,
   piezas,
   kg,
 }: {
   folio: string
   tipo: string
   oc: string
-  cadena: string
+  cliente: string
   piezas: number
   kg: number
 }) {
   const campos = [
-    { etiqueta: 'Folio', valor: folio },
+    { etiqueta: 'Folio de Distribución', valor: folio },
     { etiqueta: 'Tipo', valor: tipo },
     { etiqueta: 'Orden de compra', valor: oc },
-    { etiqueta: 'Cadena', valor: cadena },
+    { etiqueta: 'Cliente', valor: cliente },
     { etiqueta: 'Piezas', valor: piezas.toLocaleString('es-MX') },
     { etiqueta: 'Kg', valor: kg.toLocaleString('es-MX') },
   ]
@@ -221,7 +226,7 @@ function CamposDatos({
             {c.etiqueta}
           </dt>
           <dd
-            className={`truncate font-semibold ${c.etiqueta === 'Folio' ? 'text-base' : 'text-sm'}`}
+            className={`truncate font-semibold ${c.etiqueta === 'Folio de Distribución' ? 'text-base' : 'text-sm'}`}
             style={{ color: 'var(--text-primary)' }}
             title={c.valor}
           >
@@ -230,6 +235,110 @@ function CamposDatos({
         </div>
       ))}
     </dl>
+  )
+}
+
+function FichaGrupo({
+  od,
+  ocs,
+  ahora,
+  abierto,
+  ocAbierta,
+  onToggleGrupo,
+  onToggleOc,
+  onParar,
+  onReanudar,
+  onFinalizar,
+  onEditarPaquete,
+}: {
+  od: OD
+  ocs: OC[]
+  ahora: number
+  abierto: boolean
+  ocAbierta: string | null
+  onToggleGrupo: () => void
+  onToggleOc: (ocId: string) => void
+  onParar: (ocId: string) => void
+  onReanudar: (ocId: string) => void
+  onFinalizar: (ocId: string) => void
+  onEditarPaquete: (ocId: string, paqueteId: string) => void
+}) {
+  const hayParo = ocs.some((oc) => oc.estado === 'PARADA')
+  const paroAbierto = ocs
+    .flatMap((oc) => (oc.paros ?? []).map((p) => ({ oc, p })))
+    .reverse()
+    .find(({ p }) => p.cerradoEn === undefined)
+  const motivoParo = paroAbierto
+    ? paroAbierto.p.motivo === 'OTRO'
+      ? (paroAbierto.p.nota ?? ETIQUETA_MOTIVO_PARO.OTRO)
+      : ETIQUETA_MOTIVO_PARO[paroAbierto.p.motivo]
+    : undefined
+
+  return (
+    <Tarjeta className="text-left">
+      <header
+        className="flex items-start justify-between gap-3 border-b px-4 py-3"
+        style={{ borderColor: 'var(--border)' }}
+      >
+        <button
+          type="button"
+          onClick={onToggleGrupo}
+          className="flex min-w-0 flex-1 items-start gap-2 text-left"
+          aria-expanded={abierto}
+        >
+          <span aria-hidden className="mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            {abierto ? '▾' : '▸'}
+          </span>
+          <div className="min-w-0 flex-1">
+            <CamposDatos
+              folio={od.folio}
+              tipo={ETIQUETA_TIPO[od.tipo] ?? 'México'}
+              oc={ocs.map((oc) => oc.folio).join(' · ')}
+              cliente={od.cliente}
+              piezas={piezasDeOCs(ocs)}
+              kg={kgDeOCs(ocs)}
+            />
+          </div>
+        </button>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {hayParo ? (
+            <Chip color="var(--st-critical)" solido>
+              ■ Paro
+            </Chip>
+          ) : (
+            <Chip color="var(--st-good)">● En proceso</Chip>
+          )}
+          {motivoParo && (
+            <span
+              className="max-w-40 truncate text-[11px]"
+              style={{ color: 'var(--st-critical)' }}
+              title={motivoParo}
+            >
+              {motivoParo}
+            </span>
+          )}
+        </div>
+      </header>
+
+      {abierto && (
+        <div className="flex flex-col">
+          {ocs.map((oc) => (
+            <FichaOC
+              key={oc.id}
+              od={od}
+              oc={oc}
+              ahora={ahora}
+              abierta={ocAbierta === oc.id}
+              onToggle={() => onToggleOc(oc.id)}
+              onParar={() => onParar(oc.id)}
+              onReanudar={() => onReanudar(oc.id)}
+              onFinalizar={() => onFinalizar(oc.id)}
+              onEditarPaquete={(paqueteId) => onEditarPaquete(oc.id, paqueteId)}
+            />
+          ))}
+        </div>
+      )}
+    </Tarjeta>
   )
 }
 
@@ -266,48 +375,27 @@ function FichaOC({
     : undefined
 
   return (
-    <Tarjeta className="text-left">
-      <header
-        className="flex items-start justify-between gap-3 border-b px-4 py-3"
-        style={{ borderColor: 'var(--border)' }}
-      >
-        <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-start gap-2 text-left">
-          <span aria-hidden className="mt-0.5" style={{ color: 'var(--text-muted)' }}>
+    <div className="border-t" style={{ borderColor: 'var(--border)' }}>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          aria-expanded={abierta}
+        >
+          <span aria-hidden style={{ color: 'var(--text-muted)' }}>
             {abierta ? '▾' : '▸'}
           </span>
-          <div className="min-w-0 flex-1">
-            <CamposDatos
-              folio={od.folio}
-              tipo={ETIQUETA_TIPO[od.tipo] ?? 'México'}
-              oc={oc.folio}
-              cadena={od.cliente}
-              piezas={piezasDeOC(oc)}
-              kg={oc.kg ?? 0}
-            />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+              {oc.folio}
+            </p>
+            {motivoParo && (
+              <p className="truncate text-[11px]" style={{ color: 'var(--st-critical)' }} title={motivoParo}>
+                {motivoParo}
+              </p>
+            )}
           </div>
-        </button>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          {parada ? (
-            <Chip color="var(--st-critical)" solido>
-              ■ Paro
-            </Chip>
-          ) : (
-            <Chip color="var(--st-good)">● En proceso</Chip>
-          )}
-          {motivoParo && (
-            <span
-              className="max-w-40 truncate text-[11px]"
-              style={{ color: 'var(--st-critical)' }}
-              title={motivoParo}
-            >
-              {motivoParo}
-            </span>
-          )}
-        </div>
-      </header>
-
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2">
-        <div className="flex min-w-0 flex-1 items-center gap-4">
           <Reloj
             etiqueta="Prep neto"
             ms={r.prepNeto}
@@ -318,8 +406,15 @@ function FichaOC({
           <div className="min-w-32 flex-1">
             <Medidor valor={av.surtidas} total={av.total} />
           </div>
-        </div>
+        </button>
         <div className="flex items-center gap-2">
+          {parada ? (
+            <Chip color="var(--st-critical)" solido>
+              ■ Paro
+            </Chip>
+          ) : (
+            <Chip color="var(--st-good)">● En proceso</Chip>
+          )}
           {parada ? (
             <Boton tono="primario" onClick={onReanudar}>
               Reanudar
@@ -347,7 +442,7 @@ function FichaOC({
           ))}
         </div>
       )}
-    </Tarjeta>
+    </div>
   )
 }
 
@@ -402,10 +497,14 @@ function ModalInicio({
   const [personas, setPersonas] = useState<Record<string, number>>(() =>
     Object.fromEntries(od.ocs.map((oc) => [oc.id, 1])),
   )
-  const total = useMemo(
+  const [grupoAbierto, setGrupoAbierto] = useState(true)
+  const totalPersonas = useMemo(
     () => Object.values(personas).reduce((acc, n) => acc + (Number.isFinite(n) ? n : 0), 0),
     [personas],
   )
+  const totalPzas = piezasDeOD(od)
+  const totalKg = kgDeOD(od)
+  const etiquetaGrupo = od.cliente || 'Órdenes de compra'
 
   return (
     <Modal
@@ -414,59 +513,87 @@ function ModalInicio({
       pie={
         <>
           <Boton onClick={onCerrar}>Cancelar</Boton>
-          <Boton tono="primario" disabled={total < 1} onClick={() => onConfirmar(personas)}>
+          <Boton tono="primario" disabled={totalPersonas < 1} onClick={() => onConfirmar(personas)}>
             Confirmar e iniciar
           </Boton>
         </>
       }
     >
       <p className="mb-3 text-xs" style={{ color: 'var(--text-secondary)' }}>
-        Indica cuántas personas van a cada orden de compra. El total se calcula solo.
+        Indica cuántas personas van a cada orden de compra. Los totales se calculan solos.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
           <thead style={{ color: 'var(--text-muted)' }}>
             <tr>
               <th className="pb-2 font-medium">OC</th>
-              <th className="pb-2 font-medium">Piezas</th>
+              <th className="pb-2 font-medium">Pzas</th>
               <th className="pb-2 font-medium">Kg</th>
               <th className="pb-2 font-medium">Personas</th>
             </tr>
           </thead>
           <tbody>
-            {od.ocs.map((oc) => (
-              <tr key={oc.id} className="border-t" style={{ borderColor: 'var(--grid)' }}>
-                <td className="py-2 font-medium" style={{ color: 'var(--text-primary)' }}>
-                  {oc.folio}
-                </td>
-                <td className="tabular py-2">{piezasDeOC(oc).toLocaleString('es-MX')}</td>
-                <td className="tabular py-2">{(oc.kg ?? 0).toLocaleString('es-MX')}</td>
-                <td className="py-2">
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    className="w-20 rounded-md border px-2 py-1 text-sm"
-                    style={{
-                      background: 'var(--surface-2)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-primary)',
-                    }}
-                    value={personas[oc.id] ?? 0}
-                    onChange={(e) => {
-                      const n = Math.max(0, Math.floor(Number(e.target.value) || 0))
-                      setPersonas((prev) => ({ ...prev, [oc.id]: n }))
-                    }}
-                  />
-                </td>
-              </tr>
-            ))}
+            <tr className="border-t" style={{ borderColor: 'var(--grid)' }}>
+              <td className="py-2" colSpan={4}>
+                <button
+                  type="button"
+                  onClick={() => setGrupoAbierto((prev) => !prev)}
+                  className="flex items-center gap-1.5 font-semibold"
+                  style={{ color: 'var(--text-primary)' }}
+                  aria-expanded={grupoAbierto}
+                >
+                  <span aria-hidden>{grupoAbierto ? '▾' : '▸'}</span>
+                  {etiquetaGrupo}
+                </button>
+              </td>
+            </tr>
+            {grupoAbierto &&
+              od.ocs.map((oc) => (
+                <tr key={oc.id} className="border-t" style={{ borderColor: 'var(--grid)' }}>
+                  <td className="py-2 pl-6 font-medium" style={{ color: 'var(--text-primary)' }}>
+                    {oc.folio}
+                  </td>
+                  <td className="tabular py-2">{piezasDeOC(oc).toLocaleString('es-MX')}</td>
+                  <td className="tabular py-2">{(oc.kg ?? 0).toLocaleString('es-MX')}</td>
+                  <td className="py-2">
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      className="w-20 rounded-md border px-2 py-1 text-sm"
+                      style={{
+                        background: 'var(--surface-2)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-primary)',
+                      }}
+                      value={personas[oc.id] ?? 0}
+                      onChange={(e) => {
+                        const n = Math.max(0, Math.floor(Number(e.target.value) || 0))
+                        setPersonas((prev) => ({ ...prev, [oc.id]: n }))
+                      }}
+                    />
+                  </td>
+                </tr>
+              ))}
           </tbody>
+          <tfoot>
+            <tr className="border-t" style={{ borderColor: 'var(--border)' }}>
+              <td className="pt-3 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                Totales
+              </td>
+              <td className="tabular pt-3 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {totalPzas.toLocaleString('es-MX')}
+              </td>
+              <td className="tabular pt-3 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {totalKg.toLocaleString('es-MX')}
+              </td>
+              <td className="tabular pt-3 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {totalPersonas}
+              </td>
+            </tr>
+          </tfoot>
         </table>
       </div>
-      <p className="mt-3 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-        Total: {total} {total === 1 ? 'persona' : 'personas'}
-      </p>
     </Modal>
   )
 }

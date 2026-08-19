@@ -5,12 +5,15 @@ import {
   avanceOC,
   avanceOD,
   formatHora,
+  kgDeOD,
+  piezasDeOD,
   promedio,
   relojOD,
   relojSolicitud,
   semaforo,
 } from '../domain/timers'
-import type { OC, OD, Solicitud } from '../domain/types'
+import type { OC, OD, Solicitud, Surtidor } from '../domain/types'
+import { ETIQUETA_AREA, ETIQUETA_TIPO } from '../domain/types'
 import { Chip, Medidor, Reloj, StatTile, Tarjeta } from './ui'
 import { COLOR_AREA } from './tokens'
 
@@ -18,26 +21,26 @@ export function Dashboard() {
   const { estado } = useStore()
   const ahora = useAhora()
 
-  const abiertas = estado.ods.filter((o) => o.estado !== 'COMPLETADA')
-  const cerradas = estado.ods.filter((o) => o.estado === 'COMPLETADA')
+  const abiertas = estado.ods.filter((o) => o.estado !== 'EMBARCADA')
+  const embarcadas = estado.ods.filter((o) => o.estado === 'EMBARCADA')
   const parosAbiertos = abiertas.flatMap((o) => o.ocs.filter((oc) => oc.estado === 'PARADA'))
 
   const kpis = useMemo(() => {
-    const ciclos = cerradas.map((o) => relojOD(o, estado.solicitudes, ahora).ciclo)
+    const ciclos = embarcadas.map((o) => relojOD(o, estado.solicitudes, ahora).ciclo)
     const cerradasSol = estado.solicitudes.filter((s) => s.estado === 'SURTIDA')
     const netos = cerradasSol.map((s) => relojSolicitud(s, ahora).neto)
-    const brutos = cerradasSol.map((s) => relojSolicitud(s, ahora).bruto)
     const arranques = estado.ods
       .filter((o) => o.iniciadaEn !== undefined)
       .map((o) => (o.iniciadaEn as number) - o.liberadaEn)
+    const embarques = embarcadas.map((o) => relojOD(o, estado.solicitudes, ahora).embarque)
     return {
       ciclo: promedio(ciclos),
       surtidoNeto: promedio(netos),
-      surtidoBruto: promedio(brutos),
       arranque: promedio(arranques),
+      embarque: promedio(embarques),
       surtidas: cerradasSol.length,
     }
-  }, [cerradas, estado.ods, estado.solicitudes, ahora])
+  }, [embarcadas, estado.ods, estado.solicitudes, ahora])
 
   return (
     <div className="flex flex-col gap-4">
@@ -45,7 +48,7 @@ export function Dashboard() {
         <StatTile
           titulo="OD en piso"
           valor={String(abiertas.length)}
-          pie={`${cerradas.length} cerradas en el turno`}
+          pie={`${embarcadas.length} embarcadas en el turno`}
         />
         <StatTile
           titulo="Paros activos"
@@ -65,15 +68,14 @@ export function Dashboard() {
           color="var(--area-alm)"
         />
         <StatTile
-          titulo="Surtido total prom."
-          valor={fmt(kpis.surtidoBruto)}
-          pie="Incluye espera sin material"
+          titulo="Ciclo OD prom."
+          valor={fmt(kpis.ciclo)}
+          pie={`Embarque prom. ${fmt(kpis.embarque)}`}
         />
       </section>
 
       <section className="grid gap-3 lg:grid-cols-4">
-        <ColumnaFacturacion ods={estado.ods} />
-        <ColumnaPreparacion ods={abiertas} solicitudes={estado.solicitudes} ahora={ahora} />
+        <ColumnaPreparacion ods={estado.ods} solicitudes={estado.solicitudes} ahora={ahora} />
         <ColumnaSurtidor
           area="ALMACEN"
           solicitudes={estado.solicitudes}
@@ -81,11 +83,12 @@ export function Dashboard() {
           ahora={ahora}
         />
         <ColumnaSurtidor
-          area="CUBO"
+          area="MATERIAL_EMPAQUE"
           solicitudes={estado.solicitudes}
           ods={estado.ods}
           ahora={ahora}
         />
+        <ColumnaEmbarques ods={estado.ods} solicitudes={estado.solicitudes} ahora={ahora} />
       </section>
     </div>
   )
@@ -142,13 +145,7 @@ function Columna({
  * Las OC que cuelgan de una OD. Es la liga que el piso necesita ver: una OD
  * puede traer varias OC y cada una la surte un área distinta.
  */
-function ListaOC({
-  od,
-  solicitudes,
-}: {
-  od: OD
-  solicitudes: Solicitud[]
-}) {
+function ListaOC({ od, solicitudes }: { od: OD; solicitudes: Solicitud[] }) {
   return (
     <ul className="mt-2 flex flex-col gap-1 border-t pt-2" style={{ borderColor: 'var(--grid)' }}>
       {od.ocs.map((oc) => (
@@ -160,24 +157,25 @@ function ListaOC({
 
 function FilaOC({ oc, solicitudes }: { oc: OC; solicitudes: Solicitud[] }) {
   const av = avanceOC(oc)
-  const abiertas = solicitudes.filter(
-    (s) => s.ocId === oc.id && s.estado !== 'SURTIDA',
-  )
+  const abiertas = solicitudes.filter((s) => s.ocId === oc.id && s.estado !== 'SURTIDA')
   const parada = oc.estado === 'PARADA'
   const enEspera = abiertas.some((s) => s.estado === 'PAUSADA')
-  const color = oc.surtidor === 'ALMACEN' ? 'var(--area-alm)' : 'var(--area-cubo)'
 
   return (
     <li className="flex items-center gap-2">
-      <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: color }} aria-hidden />
+      <span
+        className="h-2 w-2 shrink-0 rounded-sm"
+        style={{ background: COLOR_AREA[oc.surtidor] }}
+        aria-hidden
+      />
       <span
         className="tabular shrink-0 text-[11px] font-medium"
         style={{ color: 'var(--text-primary)' }}
       >
         {oc.folio}
       </span>
-      <span className="shrink-0 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-        {oc.surtidor === 'ALMACEN' ? 'Almacén' : 'Cubo'}
+      <span className="truncate text-[11px]" style={{ color: 'var(--text-muted)' }}>
+        {ETIQUETA_AREA[oc.surtidor]}
       </span>
       <span className="flex-1" />
       {parada && (
@@ -195,10 +193,7 @@ function FilaOC({ oc, solicitudes }: { oc: OC; solicitudes: Solicitud[] }) {
           ● completa
         </span>
       )}
-      <span
-        className="tabular shrink-0 text-[11px]"
-        style={{ color: 'var(--text-secondary)' }}
-      >
+      <span className="tabular shrink-0 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
         {av.surtidas}/{av.total}
       </span>
     </li>
@@ -213,45 +208,31 @@ function Vacio({ texto }: { texto: string }) {
   )
 }
 
-function ColumnaFacturacion({ ods }: { ods: OD[] }) {
-  const sinTomar = ods.filter((o) => o.iniciadaEn === undefined)
+/** Encabezado común de las tarjetas de OD: folio, tipo, cliente, piezas y kg. */
+function CabezaOD({ od, derecha }: { od: OD; derecha: ReactNode }) {
   return (
-    <Columna
-      titulo="Facturación"
-      subtitulo="Libera la OD · fuera de medición"
-      color={COLOR_AREA.FACTURACION}
-      conteo={sinTomar.length}
-    >
-      {sinTomar.length === 0 && <Vacio texto="Sin OD por tomar" />}
-      {sinTomar.map((od) => (
-        <div
-          key={od.id}
-          className="rounded-lg border px-3 py-2 text-left"
-          style={{ borderColor: 'var(--border)', background: 'var(--surface-2)' }}
-        >
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-              {od.folio}
-            </span>
-            <span className="tabular text-xs" style={{ color: 'var(--text-muted)' }}>
-              {formatHora(od.liberadaEn)}
-            </span>
-          </div>
-          <p className="truncate text-xs" style={{ color: 'var(--text-secondary)' }}>
-            {od.cliente}
-          </p>
-          <div className="mt-1 flex flex-wrap gap-1">
-            <Chip>{od.ocs.length} OC</Chip>
-            {od.prioridad === 'URGENTE' && (
-              <Chip color="var(--st-critical)" solido>
-                URGENTE
-              </Chip>
-            )}
-          </div>
-          <ListaOC od={od} solicitudes={[]} />
-        </div>
-      ))}
-    </Columna>
+    <>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+          {od.folio}
+        </span>
+        {derecha}
+      </div>
+      <p className="truncate text-xs" style={{ color: 'var(--text-secondary)' }}>
+        {od.cliente}
+      </p>
+      <div className="mt-1 flex flex-wrap gap-1">
+        <Chip>{ETIQUETA_TIPO[od.tipo]}</Chip>
+        <Chip>{od.ocs.length} OC</Chip>
+        <Chip>{piezasDeOD(od)} pz</Chip>
+        <Chip>{kgDeOD(od)} kg</Chip>
+        {od.prioridad === 'URGENTE' && (
+          <Chip color="var(--st-critical)" solido>
+            URGENTE
+          </Chip>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -264,15 +245,49 @@ function ColumnaPreparacion({
   solicitudes: Solicitud[]
   ahora: number
 }) {
-  const activas = ods.filter((o) => o.iniciadaEn !== undefined)
+  // Primero lo que todavía no arranca (ahí corre la espera), luego lo activo.
+  const porTomar = ods.filter((o) => o.iniciadaEn === undefined)
+  const activas = ods.filter((o) => o.estado === 'EN_PREPARACION' || o.estado === 'PARADA')
+
   return (
     <Columna
       titulo="Preparación"
       subtitulo="Arma la OD y pide material"
       color={COLOR_AREA.PREPARACION}
-      conteo={activas.length}
+      conteo={porTomar.length + activas.length}
     >
-      {activas.length === 0 && <Vacio texto="Ninguna OD en proceso" />}
+      {porTomar.length + activas.length === 0 && <Vacio texto="Sin OD en piso" />}
+
+      {porTomar.map((od) => {
+        const espera = ahora - od.liberadaEn
+        return (
+          <div
+            key={od.id}
+            className="rounded-lg border border-dashed px-3 py-2 text-left"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface-2)' }}
+          >
+            <CabezaOD
+              od={od}
+              derecha={
+                <span className="tabular text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {formatHora(od.liberadaEn)}
+                </span>
+              }
+            />
+            <div className="mt-2">
+              <Reloj
+                etiqueta="Esperando arranque"
+                ms={espera}
+                tamano="sm"
+                corriendo
+                estado={semaforo(espera, UMBRALES.esperaArranque)}
+              />
+            </div>
+            <ListaOC od={od} solicitudes={solicitudes} />
+          </div>
+        )
+      })}
+
       {activas.map((od) => {
         const r = relojOD(od, solicitudes, ahora)
         const av = avanceOD(od)
@@ -286,21 +301,18 @@ function ColumnaPreparacion({
               background: 'var(--surface-2)',
             }}
           >
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-                {od.folio}
-              </span>
-              {parada ? (
-                <Chip color="var(--st-critical)" solido>
-                  ■ PARO
-                </Chip>
-              ) : (
-                <Chip color="var(--st-good)">● En proceso</Chip>
-              )}
-            </div>
-            <p className="truncate text-xs" style={{ color: 'var(--text-secondary)' }}>
-              {od.cliente}
-            </p>
+            <CabezaOD
+              od={od}
+              derecha={
+                parada ? (
+                  <Chip color="var(--st-critical)" solido>
+                    ■ PARO
+                  </Chip>
+                ) : (
+                  <Chip color="var(--st-good)">● En proceso</Chip>
+                )
+              }
+            />
             <div className="mt-2 grid grid-cols-2 gap-2">
               <Reloj
                 etiqueta="Prep neto"
@@ -333,7 +345,7 @@ function ColumnaSurtidor({
   ods,
   ahora,
 }: {
-  area: 'ALMACEN' | 'CUBO'
+  area: Surtidor
   solicitudes: Solicitud[]
   ods: OD[]
   ahora: number
@@ -343,13 +355,11 @@ function ColumnaSurtidor({
     .filter((s) => s.surtidor === area && s.estado !== 'SURTIDA')
     .sort((a, b) => Number(b.esParo) - Number(a.esParo) || a.creadaEn - b.creadaEn)
 
-  const color = area === 'ALMACEN' ? COLOR_AREA.ALMACEN : COLOR_AREA.CUBO
-
   return (
     <Columna
-      titulo={area === 'ALMACEN' ? 'Almacén' : 'Cubo'}
+      titulo={ETIQUETA_AREA[area]}
       subtitulo="Surte contra OC"
-      color={color}
+      color={COLOR_AREA[area]}
       conteo={cola.length}
     >
       {cola.length === 0 && <Vacio texto="Cola limpia" />}
@@ -401,6 +411,82 @@ function ColumnaSurtidor({
                 estado={semaforo(r.bruto, UMBRALES.surtidoTotal)}
               />
             </div>
+          </div>
+        )
+      })}
+    </Columna>
+  )
+}
+
+function ColumnaEmbarques({
+  ods,
+  solicitudes,
+  ahora,
+}: {
+  ods: OD[]
+  solicitudes: Solicitud[]
+  ahora: number
+}) {
+  // Preparación ya cerró todas las OC; falta cargar y confirmar la salida.
+  const enCola = ods
+    .filter((o) => o.estado === 'EN_EMBARQUE')
+    .sort((a, b) => (a.terminadaEn ?? 0) - (b.terminadaEn ?? 0))
+  const salidas = ods
+    .filter((o) => o.estado === 'EMBARCADA')
+    .sort((a, b) => (b.embarcadaEn ?? 0) - (a.embarcadaEn ?? 0))
+    .slice(0, 5)
+
+  return (
+    <Columna
+      titulo="Embarques"
+      subtitulo="Carga y confirma la salida"
+      color={COLOR_AREA.EMBARQUES}
+      conteo={enCola.length}
+    >
+      {enCola.length === 0 && salidas.length === 0 && <Vacio texto="Nada por cargar" />}
+
+      {enCola.map((od) => {
+        const r = relojOD(od, solicitudes, ahora)
+        return (
+          <div
+            key={od.id}
+            className="rounded-lg border px-3 py-2 text-left"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface-2)' }}
+          >
+            <CabezaOD od={od} derecha={<Chip color="var(--st-warning)">▲ Por cargar</Chip>} />
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <Reloj
+                etiqueta="En andén"
+                ms={r.embarque}
+                tamano="sm"
+                corriendo
+                estado={semaforo(r.embarque, UMBRALES.embarque)}
+              />
+              <Reloj etiqueta="Ciclo OD" ms={r.ciclo} tamano="sm" />
+            </div>
+          </div>
+        )
+      })}
+
+      {salidas.map((od) => {
+        const r = relojOD(od, solicitudes, ahora)
+        return (
+          <div
+            key={od.id}
+            className="rounded-lg border px-3 py-2 text-left opacity-80"
+            style={{ borderColor: 'var(--grid)', background: 'var(--surface-1)' }}
+          >
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {od.folio}
+              </span>
+              <span className="text-[11px] font-medium" style={{ color: 'var(--st-good)' }}>
+                ● Embarcada {formatHora(od.embarcadaEn ?? 0)}
+              </span>
+            </div>
+            <p className="tabular text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Andén {fmt(r.embarque)} · ciclo {fmt(r.ciclo)}
+            </p>
           </div>
         )
       })}

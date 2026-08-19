@@ -1,16 +1,24 @@
-import type { OC, OD, Paquete, Pieza, Surtidor, TipoDestino } from './types'
+import {
+  CLIENTES,
+  type Cliente,
+  type OC,
+  type OD,
+  type Paquete,
+  type Pieza,
+  type Surtidor,
+  type TipoDestino,
+} from './types'
 
-/** Datos simulados. Se reemplazan cuando se conecte la fuente real de Facturación. */
-
-const CLIENTES = [
-  'Comercial del Norte',
-  'Distribuidora Bajío',
-  'Grupo Peninsular',
-  'Autoservicio Centro',
-  'Mayoreo Pacífico',
-  'Cadena Sureste',
-  'Abarrotera Regional',
-]
+/**
+ * Alta provisional de OD.
+ *
+ * Es el único punto del proyecto que inventa datos, y existe sólo porque
+ * todavía no hay captura real de Facturación: el botón «+ Liberar OD» arma
+ * una OD con folios y cantidades verosímiles para poder cronometrar el piso.
+ * Se reemplaza completo cuando exista el formato de captura / la conexión
+ * con el sistema de Facturación. No hay motor de simulación: nada se mueve
+ * solo, cada evento lo registra una persona desde su pantalla.
+ */
 
 const COLORES = [
   'Blanco',
@@ -48,15 +56,14 @@ function id(prefijo: string): string {
   return `${prefijo}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
+/** Una OD nace sin nada en piso: Preparación captura el real conforme avanza. */
 function nuevaPieza(color: string): Pieza {
-  const cantidad = entre(4, 60)
-  const disponible = Math.random() > 0.35
   return {
     id: id('pz'),
     color,
-    cantidad,
-    real: disponible ? cantidad : 0,
-    disponible,
+    cantidad: entre(4, 60),
+    real: 0,
+    disponible: false,
   }
 }
 
@@ -73,10 +80,11 @@ function nuevoPaquete(): Paquete {
   return { id: id('pq'), clave: elige(CLAVES), piezas }
 }
 
-function nuevaOC(surtidor: Surtidor): OC {
+function nuevaOC(surtidor: Surtidor, cliente: Cliente): OC {
   return {
     id: id('oc'),
     folio: `OC-${String(entre(10000, 99999))}`,
+    cliente,
     surtidor,
     paquetes: Array.from({ length: entre(1, 3) }, nuevoPaquete),
     kg: entre(20, 350),
@@ -85,30 +93,21 @@ function nuevaOC(surtidor: Surtidor): OC {
   }
 }
 
-/** Crea una Distribución Liberada en `liberadaEn` (default: ahora). */
+/** Crea una OD liberada por Facturación en `liberadaEn` (default: ahora). */
 export function nuevaOD(liberadaEn = Date.now()): OD {
   const cuantasOC = entre(1, 4)
+  const cliente = elige(CLIENTES)
+  const ocs = Array.from({ length: cuantasOC }, () =>
+    nuevaOC(Math.random() > 0.5 ? 'ALMACEN' : 'MATERIAL_EMPAQUE', cliente),
+  )
   return {
     id: id('od'),
     folio: `OD-${String(24000 + contador++)}`,
-    cliente: elige(CLIENTES),
+    cliente,
     tipo: siguienteTipo(),
     prioridad: Math.random() > 0.8 ? 'URGENTE' : 'NORMAL',
     estado: 'LIBERADA',
-    ocs: Array.from({ length: cuantasOC }, () =>
-      nuevaOC(Math.random() > 0.5 ? 'ALMACEN' : 'CUBO'),
-    ),
+    ocs,
     liberadaEn,
   }
-}
-
-/** Carga inicial: unas cuantas OD escalonadas hacia atrás en el tiempo. */
-export function semilla(): OD[] {
-  const ahora = Date.now()
-  return [
-    nuevaOD(ahora - 26 * 60_000),
-    nuevaOD(ahora - 18 * 60_000),
-    nuevaOD(ahora - 9 * 60_000),
-    nuevaOD(ahora - 3 * 60_000),
-  ]
 }

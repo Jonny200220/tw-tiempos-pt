@@ -6,10 +6,12 @@ export const UMBRALES = {
   esperaArranque: { alerta: 10, critico: 20 },
   /** Reloj neto de Preparación sobre una OD. */
   preparacion: { alerta: 30, critico: 60 },
-  /** Reloj neto de Almacén/Cubo sobre una solicitud. */
+  /** Reloj neto de Almacén / Material de Empaque sobre una solicitud. */
   surtido: { alerta: 8, critico: 15 },
   /** Reloj bruto de una solicitud (incluye espera sin material). */
   surtidoTotal: { alerta: 20, critico: 45 },
+  /** Preparación cerró la OD → Embarques confirmó la salida. */
+  embarque: { alerta: 15, critico: 30 },
 } as const
 
 export type Semaforo = 'ok' | 'alerta' | 'critico'
@@ -112,17 +114,22 @@ export interface RelojOD {
   prepBruto: number
   /** Suma de paros por falta de material sobre esta OD (sin doble conteo). */
   paroMaterial: number
-  /** Liberación → cierre. El número que ve el cliente. */
+  /** Preparación cerró → Embarques confirmó la salida. */
+  embarque: number
+  /** Liberación → salida de planta. El número que ve el cliente. */
   ciclo: number
 }
 
 export function relojOD(od: OD, solicitudes: Solicitud[], ahora: number): RelojOD {
+  // `terminadaEn` cierra Preparación; `embarcadaEn` cierra el ciclo completo.
   const fin = od.terminadaEn ?? ahora
-  const ciclo = fin - od.liberadaEn
+  const ciclo = (od.embarcadaEn ?? ahora) - od.liberadaEn
   const esperaArranque = (od.iniciadaEn ?? ahora) - od.liberadaEn
+  const embarque =
+    od.terminadaEn === undefined ? 0 : (od.embarcadaEn ?? ahora) - od.terminadaEn
 
   if (od.iniciadaEn === undefined) {
-    return { esperaArranque, prepNeto: 0, prepBruto: 0, paroMaterial: 0, ciclo }
+    return { esperaArranque, prepNeto: 0, prepBruto: 0, paroMaterial: 0, embarque, ciclo }
   }
 
   const prepBruto = fin - od.iniciadaEn
@@ -142,6 +149,7 @@ export function relojOD(od: OD, solicitudes: Solicitud[], ahora: number): RelojO
     prepNeto: Math.max(0, prepBruto - paroMaterial),
     prepBruto,
     paroMaterial,
+    embarque,
     ciclo,
   }
 }

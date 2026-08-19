@@ -3,7 +3,7 @@ import { StoreCtx } from './contexto'
 import { estadoInicial, hidratarEstado, reducer } from './reducer'
 import type { Estado } from './types'
 
-const LLAVE = 'tiempos_pt.estado.v2'
+const LLAVE = 'tiempos_pt.estado.v3'
 const CANAL = 'tiempos_pt'
 
 function cargar(): Estado {
@@ -12,7 +12,7 @@ function cargar(): Estado {
     if (!crudo) return estadoInicial()
     const guardado = JSON.parse(crudo) as Estado
     if (!Array.isArray(guardado.ods)) return estadoInicial()
-    return hidratarEstado({ ...estadoInicial(), ...guardado, simulando: false })
+    return hidratarEstado({ ...estadoInicial(), ...guardado })
   } catch {
     return estadoInicial()
   }
@@ -49,13 +49,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     canal.current?.postMessage(estado)
   }, [estado])
-
-  // Motor de simulación, sólo para la demo con datos falsos.
-  useEffect(() => {
-    if (!estado.simulando) return
-    const id = setInterval(() => dispatch({ tipo: 'SIM_TICK', t: Date.now() }), 3500)
-    return () => clearInterval(id)
-  }, [estado.simulando])
 
   const valor = useMemo(() => ({ estado, dispatch }), [estado])
   return <StoreCtx.Provider value={valor}>{children}</StoreCtx.Provider>

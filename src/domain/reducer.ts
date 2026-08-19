@@ -1,4 +1,4 @@
-import { nuevaOD, semilla } from './seed'
+import { nuevaOD } from './seed'
 import type {
   Area,
   Estado,
@@ -9,7 +9,7 @@ import type {
   Solicitud,
   Surtidor,
 } from './types'
-import { ETIQUETA_MOTIVO_PARO } from './types'
+import { ETIQUETA_AREA, ETIQUETA_MOTIVO_PARO } from './types'
 
 export type Accion =
   | { tipo: 'LIBERAR_OD' }
@@ -44,53 +44,76 @@ export type Accion =
   | { tipo: 'PAUSAR_SURTIDO'; solicitudId: string; nota: string }
   | { tipo: 'REANUDAR_SURTIDO'; solicitudId: string }
   | { tipo: 'CONFIRMAR_SURTIDO'; solicitudId: string }
-  | { tipo: 'TERMINAR_OD'; odId: string }
+  | { tipo: 'CONFIRMAR_EMBARQUE'; odId: string }
   | { tipo: 'MARCAR_LEIDAS'; area: Area }
-  | { tipo: 'TOGGLE_SIMULACION' }
-  | { tipo: 'SIM_TICK'; t: number }
   | { tipo: 'REINICIAR' }
   | { tipo: 'REEMPLAZAR'; estado: Estado }
 
+/** El tablero arranca vacío: los datos entran cuando alguien libera una OD. */
 export function estadoInicial(): Estado {
-  return { ods: semilla(), solicitudes: [], notificaciones: [], simulando: false }
+  return { ods: [], solicitudes: [], notificaciones: [] }
 }
 
 /**
- * Completa campos nuevos sobre un estado persistido (localStorage / otra pestaña).
+ * Completa campos nuevos sobre un estado persistido (localStorage / otra pestaña)
+ * y traduce los nombres viejos (`CUBO`, `PARO_MATERIAL`, `COMPLETADA`).
  * Sin esto, OCs viejas no tienen `paros` y `relojOD` truena al hacer `.map`.
  */
 export function hidratarEstado(estado: Estado): Estado {
   return {
-    ...estado,
     ods: (estado.ods ?? []).map(hidratarOD),
-    solicitudes: estado.solicitudes ?? [],
-    notificaciones: estado.notificaciones ?? [],
+    solicitudes: (estado.solicitudes ?? []).map(hidratarSolicitud),
+    notificaciones: (estado.notificaciones ?? []).map((n) => ({
+      ...n,
+      para: migrarArea(n.para),
+    })),
   }
+}
+
+/** El área CUBO se renombró a MATERIAL_EMPAQUE. */
+function migrarArea(area: Area | 'CUBO'): Area {
+  return area === 'CUBO' ? 'MATERIAL_EMPAQUE' : area
+}
+
+function migrarSurtidor(s: Surtidor | 'CUBO'): Surtidor {
+  return s === 'CUBO' ? 'MATERIAL_EMPAQUE' : s
+}
+
+function hidratarSolicitud(s: Solicitud): Solicitud {
+  return { ...s, surtidor: migrarSurtidor(s.surtidor) }
 }
 
 function hidratarOD(od: OD): OD {
   const crudo = od.estado as string
-  const estado = crudo === 'PARO_MATERIAL' ? 'PARADA' : od.estado
+  let estado = od.estado
+  if (crudo === 'PARO_MATERIAL') estado = 'PARADA'
+  // Antes `COMPLETADA` era el final del flujo; ahora falta pasar por Embarques.
+  if (crudo === 'COMPLETADA') estado = 'EN_EMBARQUE'
+  const cliente = od.cliente || (od.ocs ?? [])[0]?.cliente || ''
+  const ocs = (od.ocs ?? []).map((oc) => hidratarOC(oc, { ...od, estado, cliente }))
   return {
     ...od,
     tipo: od.tipo ?? 'MEXICO',
     estado,
-    ocs: (od.ocs ?? []).map((oc) => hidratarOC(oc, { ...od, estado })),
+    cliente,
+    ocs,
   }
 }
 
 function hidratarOC(oc: OC, od: OD): OC {
   let estado = oc.estado
   if (!estado) {
-    if (od.estado === 'COMPLETADA') estado = 'COMPLETADA'
+    if (od.estado === 'EN_EMBARQUE' || od.estado === 'EMBARCADA') estado = 'COMPLETADA'
     else if (od.estado === 'PARADA') estado = 'PARADA'
     else if (od.iniciadaEn !== undefined) estado = 'EN_PREPARACION'
     else estado = 'PENDIENTE'
   }
   return {
     ...oc,
+    cliente: od.cliente,
     kg: oc.kg ?? 0,
     estado,
+    surtidor: migrarSurtidor(oc.surtidor),
     paros: oc.paros ?? [],
     paquetes: (oc.paquetes ?? []).map((p) => ({
       ...p,
@@ -138,13 +161,20 @@ function buscarOC(od: OD, ocId: string) {
   return od.ocs.find((oc) => oc.id === ocId)
 }
 
+/** Una OD sigue en manos de Preparación mientras no pase a Embarques. */
+export function enPreparacion(od: OD): boolean {
+  return od.estado === 'EN_PREPARACION' || od.estado === 'PARADA'
+}
+
 /** El estado de la OD se deriva de sus OC. */
 function recalcularEstadoOD(od: OD, ahora: number): OD {
   if (od.iniciadaEn === undefined) return od
+  if (od.estado === 'EMBARCADA') return od
   if (od.ocs.every((oc) => oc.estado === 'COMPLETADA')) {
+    // Preparación terminó: la OD se forma en la cola de Embarques.
     return {
       ...od,
-      estado: 'COMPLETADA',
+      estado: 'EN_EMBARQUE',
       terminadaEn: od.terminadaEn ?? ahora,
     }
   }
@@ -192,9 +222,6 @@ export function reducer(estado: Estado, accion: Accion): Estado {
 
     case 'REINICIAR':
       return estadoInicial()
-
-    case 'TOGGLE_SIMULACION':
-      return { ...estado, simulando: !estado.simulando }
 
     case 'LIBERAR_OD': {
       const od = nuevaOD(ahora)
@@ -335,8 +362,20 @@ export function reducer(estado: Estado, accion: Accion): Estado {
         estado: 'COMPLETADA',
         terminadaEn: ahora,
       }))
+      // Al cerrar la última OC, la OD se forma en Embarques.
+      const notificaciones =
+        odNueva.estado === 'EN_EMBARQUE' && od.estado !== 'EN_EMBARQUE'
+          ? notificar(estado, {
+              para: 'EMBARQUES',
+              titulo: `Lista para cargar · ${od.folio}`,
+              detalle: `${od.cliente} · ${od.ocs.length} OC`,
+              severidad: od.prioridad === 'URGENTE' ? 'alerta' : 'info',
+              refId: od.id,
+            })
+          : estado.notificaciones
       return {
         ...estado,
+        notificaciones,
         ods: estado.ods.map((o) => (o.id === od.id ? odNueva : o)),
       }
     }
@@ -423,7 +462,7 @@ export function reducer(estado: Estado, accion: Accion): Estado {
         solicitudes,
         ods: estado.ods.map((o) => (o.id === od.id ? recalcularEstadoOD(o, ahora) : o)),
         notificaciones: notificar(estado, {
-          para: oc.surtidor as Area,
+          para: oc.surtidor,
           titulo: accion.esParo
             ? `PARO en ${od.folio} · ${oc.folio}`
             : `Pedido de material · ${oc.folio}`,
@@ -544,21 +583,28 @@ export function reducer(estado: Estado, accion: Accion): Estado {
         notificaciones: notificar(estado, {
           para: 'PREPARACION',
           titulo: `Material surtido · ${od?.folio ?? ''}`,
-          detalle: `${s.surtidor === 'CUBO' ? 'Cubo' : 'Almacén'} entregó ${s.piezaIds.length} pieza(s)`,
+          detalle: `${ETIQUETA_AREA[s.surtidor]} entregó ${s.piezaIds.length} pieza(s)`,
           severidad: 'info',
           refId: s.odId,
         }),
       }
     }
 
-    case 'TERMINAR_OD': {
+    case 'CONFIRMAR_EMBARQUE': {
       const od = estado.ods.find((o) => o.id === accion.odId)
-      if (!od || od.estado === 'COMPLETADA') return estado
+      if (!od || od.estado !== 'EN_EMBARQUE') return estado
       return {
         ...estado,
         ods: estado.ods.map((o) =>
-          o.id === od.id ? { ...o, estado: 'COMPLETADA', terminadaEn: ahora } : o,
+          o.id === od.id ? { ...o, estado: 'EMBARCADA', embarcadaEn: ahora } : o,
         ),
+        notificaciones: notificar(estado, {
+          para: 'FACTURACION',
+          titulo: `Embarcada · ${od.folio}`,
+          detalle: `${od.cliente} · salió de planta`,
+          severidad: 'info',
+          refId: od.id,
+        }),
       }
     }
 
@@ -570,99 +616,9 @@ export function reducer(estado: Estado, accion: Accion): Estado {
         ),
       }
 
-    case 'SIM_TICK':
-      return simular(estado, accion.t)
-
     default:
       return estado
   }
-}
-
-// -------------------------------------------------------- motor de simulación
-
-/**
- * Avanza el flujo solo para la demo: Facturación libera OD, Preparación arranca
- * y levanta paros, y Almacén/Cubo surte, pausa lo que no tiene y adelanta otro
- * pedido. Se apaga desde la barra superior.
- */
-function simular(estado: Estado, t: number): Estado {
-  let siguiente = estado
-  const dado = () => Math.random()
-
-  // Facturación libera de vez en cuando.
-  if (dado() < 0.15) siguiente = reducer(siguiente, { tipo: 'LIBERAR_OD' })
-
-  // Preparación arranca la OD más antigua sin iniciar.
-  const pendiente = siguiente.ods.find((o) => o.iniciadaEn === undefined)
-  if (pendiente && dado() < 0.5) {
-    const personasPorOc = Object.fromEntries(pendiente.ocs.map((oc) => [oc.id, 1 + Math.floor(dado() * 3)]))
-    siguiente = reducer(siguiente, {
-      tipo: 'INICIAR_PREPARACION',
-      odId: pendiente.id,
-      personasPorOc,
-    })
-  }
-
-  // Preparación detiene una OC (material o descanso) y luego la reanuda.
-  const ocsActivas = siguiente.ods.flatMap((od) =>
-    od.ocs
-      .filter((oc) => oc.estado === 'EN_PREPARACION' || oc.estado === 'PARADA')
-      .map((oc) => ({ od, oc })),
-  )
-  for (const { od, oc } of ocsActivas) {
-    if (oc.estado === 'EN_PREPARACION' && dado() < 0.2) {
-      siguiente = reducer(siguiente, {
-        tipo: 'PARAR_OC',
-        odId: od.id,
-        ocId: oc.id,
-        motivo: dado() < 0.7 ? 'FALTA_MATERIAL' : 'DESCANSO',
-      })
-      break
-    }
-    if (oc.estado === 'PARADA' && dado() < 0.25) {
-      siguiente = reducer(siguiente, { tipo: 'REANUDAR_OC', odId: od.id, ocId: oc.id })
-      break
-    }
-  }
-
-  // Almacén/Cubo trabaja la cola.
-  for (const s of siguiente.solicitudes) {
-    if (s.estado === 'SURTIDA') continue
-    if (s.estado === 'SOLICITADA' && dado() < 0.45) {
-      siguiente = reducer(siguiente, { tipo: 'INICIAR_SURTIDO', solicitudId: s.id })
-      continue
-    }
-    if (s.estado === 'EN_SURTIDO') {
-      // Sin material: deja este surtido para después y adelanta otro.
-      if (dado() < 0.2) {
-        siguiente = reducer(siguiente, {
-          tipo: 'PAUSAR_SURTIDO',
-          solicitudId: s.id,
-          nota: 'Sin existencia en rack, se adelanta otro pedido',
-        })
-      } else if (dado() < 0.4) {
-        siguiente = reducer(siguiente, { tipo: 'CONFIRMAR_SURTIDO', solicitudId: s.id })
-      }
-      continue
-    }
-    if (s.estado === 'PAUSADA' && dado() < 0.15) {
-      siguiente = reducer(siguiente, { tipo: 'REANUDAR_SURTIDO', solicitudId: s.id })
-    }
-  }
-
-  // Preparación cierra cada OC cuando ya tiene todo.
-  for (const od of siguiente.ods) {
-    if (od.estado === 'COMPLETADA' || od.iniciadaEn === undefined) continue
-    for (const oc of od.ocs) {
-      if (oc.estado === 'COMPLETADA' || !ocCompleta(oc)) continue
-      if (dado() < 0.6) {
-        siguiente = reducer(siguiente, { tipo: 'TERMINAR_OC', odId: od.id, ocId: oc.id })
-      }
-    }
-  }
-
-  void t
-  return siguiente
 }
 
 export type { Surtidor }
